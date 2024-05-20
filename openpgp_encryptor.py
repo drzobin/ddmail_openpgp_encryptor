@@ -160,8 +160,18 @@ def encrypt_email(raw_email, recipient, gnupg_home):
     r = session.query(Email).filter(Email.email == recipient).first()
 
     # Full path to keyring file.
-    account_keyring = gnupg_home + r.account.account
+    account_keyring = gnupg_home + "/" + r.account.account
     logging.info("encrypt_email() account_keyring: " + account_keyring)
+
+    # Check that account_keyring is a file.
+    if os.path.isfile(account_keyring) != True:
+        logging.error("encrypt_email() account_keyring: " + account_keyring + " is not a file")
+        return raw_email
+    
+    # Check that we can read account_keyring file.
+    if os.access(account_keyring, os.R_OK) != True:
+        logging.error("encrypt_email() account_keyring: " + account_keyring + " can not be read")
+        return raw_email
 
     # Fingerprint of OpenPGP public key to use for encryption.
     fingerprint = r.openpgp_public_key.fingerprint
