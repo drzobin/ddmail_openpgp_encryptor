@@ -139,6 +139,34 @@ def is_email_allowed(email):
 
     return True
 
+# Validate account string. Only allow the following chars: A-Z and 0-9
+def is_account_allowed(account):
+    pattern = re.compile(r"[A-Z0-9]")
+
+    for char in account:
+        if not re.match(pattern, char):
+            return False
+
+    return True
+
+# Validate openpgp public key fingerprint string. Only allow the following chars: A-Z, 0-9
+def is_fingerprint_allowed(fingerprint):
+    if fingerprint == None:
+        return False
+
+    # Fingerprint string should be 40 char.
+    allowed_len = 40
+    if len(fingerprint) != allowed_len:
+        return False
+
+    # Only allow A-Z, 0-9
+    pattern = re.compile(r"[A-Z0-9]")
+    for char in fingerprint:
+        if not re.match(pattern, char):
+            return False
+
+    return True
+
 def send_email(email_from ,email_to, msg):
     s = smtplib.SMTP(host = "127.0.0.1", port = 10028)
     s.sendmail(email_from, email_to, msg)
@@ -159,6 +187,11 @@ def encrypt_email(raw_email, recipient, gnupg_home):
     # Get openpgp public key fingerprint and keyring name, the keyring name is the ddmail account that ownes the current email.
     r = session.query(Email).filter(Email.email == recipient).first()
 
+    # Validate account string used as keyring filename.
+    if is_account_allowed(r.account.account) != True:
+        logging.error("encrypt_email() account_keyring: " + r.account.account + " failed validation")
+        return raw_email
+
     # Full path to keyring file.
     account_keyring = gnupg_home + "/" + r.account.account
     logging.info("encrypt_email() account_keyring: " + account_keyring)
@@ -176,6 +209,11 @@ def encrypt_email(raw_email, recipient, gnupg_home):
     # Fingerprint of OpenPGP public key to use for encryption.
     fingerprint = r.openpgp_public_key.fingerprint
     logging.info("encrypt_email() fingerprint: " + fingerprint)
+
+    # Validate fingerprint from db.
+    if is_fingerprint_allowed(fingerprint) != True:
+        logging.error("encrypt_email() fingerprint: " + fingerprint + " failed validation")
+        return raw_email
     
     parsed_email = email.message_from_string(raw_email)
 
