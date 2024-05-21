@@ -173,12 +173,20 @@ def send_email(email_from ,email_to, msg):
     s.quit()
 
 def shall_email_be_encrypted(sender, recipient):
+    # Check if email recipient exist in ddmail db.
+    r = session.query(Email).filter(Email.email == recipient).count()
+    
+    # If email recipient do not exist in ddmail db it should not be encrypted beacuse ddmail is not the final destination.
+    if r == 0:
+        return False
+
+    # Check if the email should be encrypted.
     r = session.query(Email).filter(Email.email == recipient).first()
 
-    if r.openpgp_public_key_id != None:
-        return True
-    else:
+    if r.openpgp_public_key_id == None:
         return False
+    else:
+        return True
         
 def encrypt_email(raw_email, recipient, gnupg_home):
     # Log function arguments.
