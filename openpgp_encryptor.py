@@ -20,8 +20,8 @@ logging.basicConfig(filename="/var/log/ddmail_openpgp_encryptor.log", format='%(
 # Get arguments from args.
 parser = argparse.ArgumentParser(description="Encrypt email with OpenPGP for ddmail service.")
 parser.add_argument('--config-file', type=str, help='Full path to config file.', required=True)
-parser.add_argument('--email-from', type=str, help='The emails from address.', required=True)
-parser.add_argument('--email-to', type=str, help='The emails to address.', required=True)
+parser.add_argument('--sender', type=str, help='The sender emails address.', required=True)
+parser.add_argument('--recipient', type=str, help='The recipient emails address.', required=True)
 args = parser.parse_args()
 
 # Check that config file exsist and is a file.
@@ -173,15 +173,11 @@ def send_email(email_from ,email_to, msg):
     s.quit()
 
 def shall_email_be_encrypted(sender, recipient):
-    # Check if email recipient exist in ddmail db.
-    r = session.query(Email).filter(Email.email == recipient).count()
-    
-    # If email recipient do not exist in ddmail db it should not be encrypted beacuse ddmail is not the final destination.
-    if r == 0:
-        return False
-
-    # Check if the email should be encrypted.
     r = session.query(Email).filter(Email.email == recipient).first()
+    
+    # Check if email recipient exist in ddmail db. If email recipient do not exist in ddmail db it should not be encrypted beacuse ddmail is not the final destination.
+    if r == None:
+        return False
 
     if r.openpgp_public_key_id == None:
         return False
@@ -257,25 +253,31 @@ if __name__ == "__main__":
     # Get email data from stdin.
     raw_email = sys.stdin.read()
 
-    # Validate to email address.
-    if is_email_allowed(args.email_to) != True:
-        logging.error("validation failed for args.email_to: " + args.email_to)
-        sys.exit(1)
+    # Get the sender and recipient emails and make the strings lower chars.
+    sender = args.sender.lower()
+    recipient = args.recipient.lower()
+
+    # Validate recipient email address.
+    if is_email_allowed(recipient) != True:
+        logging.error("validation failed for args.email_to: " + recipient)
+        send_email(sender, recipient, raw_email)
+        sys.exit(0)
 
     # Validate from email address.
-    if is_email_allowed(args.email_from) != True:
-        logging.error("validation failed for args.email_from: " + args.email_from)
-        sys.exit(1)
+    if is_email_allowed(sender) != True:
+        logging.error("validation failed for args.email_from: " + sender)
+        send_email(sender, recipient, raw_email)
+        sys.exit(0)
 
-    # Log to and from email address.
-    logging.info("parsing email to: " + args.email_to + " from: " + args.email_from)
+    # Log recipient email and sender email address.
+    logging.info("parsing email recipient: " + recipient + " sender: " + sender)
 
     # Check if email should be encrypted. If the email should be encrypted we will encrypt it and return the encrypted email.
-    if shall_email_be_encrypted(args.email_from, args.email_to) == True:
+    if shall_email_be_encrypted(sender, recipient) == True:
         logging.info("email skould be encrypted")
-        raw_email = encrypt_email(raw_email, args.email_to, config["DEFAULT"]["gnupg_home"])
+        raw_email = encrypt_email(raw_email, recipient, config["DEFAULT"]["gnupg_home"])
     else:
         logging.info("email should not be encrypted")
 
     # Send email back to postfix.
-    send_email(args.email_from, args.email_to, raw_email)
+    send_email(sender, recipient, raw_email)
