@@ -264,7 +264,7 @@ if __name__ == "__main__":
 
     # Validate from email address.
     if is_email_allowed(args.email_from) != True:
-        logging.error("validation failed for args.email_from: " + args_email_from)
+        logging.error("validation failed for args.email_from: " + args.email_from)
         sys.exit(1)
 
     # Log to and from email address.
