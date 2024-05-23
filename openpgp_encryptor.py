@@ -167,23 +167,41 @@ def is_fingerprint_allowed(fingerprint):
 
     return True
 
-def send_email(email_from ,email_to, msg):
+# Send email to SMTP server 127.0.0.1 port 10028
+def send_email(sender ,recipient, msg):
     s = smtplib.SMTP(host = "127.0.0.1", port = 10028)
-    s.sendmail(email_from, email_to, msg)
+    s.sendmail(sender, recipient, msg)
     s.quit()
 
-def shall_email_be_encrypted(sender, recipient):
+# Check if a email is encrypted ot not.
+def is_email_encrypted(raw_email):
+    parsed_email = email.message_from_string(raw_email)
+    look_for = ["Content-Type: multipart/encrypted","Content-Type: application/pgp-encrypted"]
+
+    for string in look_for:
+        if string in raw_email:
+            return True
+
+    return False
+
+# Check if email should be encrypted ot not.
+def shall_email_be_encrypted(sender, recipient, raw_email):
     r = session.query(Email).filter(Email.email == recipient).first()
     
     # Check if email recipient exist in ddmail db. If email recipient do not exist in ddmail db it should not be encrypted beacuse ddmail is not the final destination.
     if r == None:
         return False
-
-    if r.openpgp_public_key_id == None:
+    # If settings in ddmail db is not set to activate openpgp encryption for the email address then email should not be encrypted.
+    elif r.openpgp_public_key_id == None:
         return False
+    # If email already is encrypted do not encrypt it again.
+    elif is_email_encrypted(raw_email) == True:
+        return False
+    # Email should be encrypted.
     else:
         return True
-        
+
+# Encrypt email body with OpenPGP.
 def encrypt_email(raw_email, recipient, gnupg_home):
     # Log function arguments.
     logging.info("encrypt_email() recipient: " + recipient + " gnupg_home: " + gnupg_home)
@@ -273,7 +291,7 @@ if __name__ == "__main__":
     logging.info("parsing email recipient: " + recipient + " sender: " + sender)
 
     # Check if email should be encrypted. If the email should be encrypted we will encrypt it and return the encrypted email.
-    if shall_email_be_encrypted(sender, recipient) == True:
+    if shall_email_be_encrypted(sender, recipient, raw_email) == True:
         logging.info("email skould be encrypted")
         raw_email = encrypt_email(raw_email, recipient, config["DEFAULT"]["gnupg_home"])
     else:
