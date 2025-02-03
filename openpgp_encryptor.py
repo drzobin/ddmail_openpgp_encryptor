@@ -170,7 +170,7 @@ def is_fingerprint_allowed(fingerprint):
 # Send email to SMTP server 127.0.0.1 port 10028
 def send_email(sender ,recipient, msg):
     s = smtplib.SMTP(host = "127.0.0.1", port = 10028)
-    s.sendmail(sender, recipient, msg)
+    s.sendmail(sender, recipient, msg.encode("utf8"))
     s.quit()
 
 # Check if a email is encrypted ot not.
