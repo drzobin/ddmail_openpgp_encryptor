@@ -12,33 +12,12 @@ import email.mime.multipart
 import gnupg
 import sqlalchemy as db
 from sqlalchemy import ForeignKey
-from sqlalchemy.orm import relationship, mapped_column, declarative_base
+from sqlalchemy.orm import relationship, mapped_column, declarative_base, DeclarativeBase
+from aiosmtpd.controller import Controller
+from aiosmtpd.handlers import Debugging
 
-# Configure logging.
-logging.basicConfig(filename="/var/log/ddmail_openpgp_encryptor.log", format='%(asctime)s: %(levelname)s: %(message)s', level=logging.INFO)
-    
-# Get arguments from args.
-parser = argparse.ArgumentParser(description="Encrypt email with OpenPGP for ddmail service.")
-parser.add_argument('--config-file', type=str, help='Full path to config file.', required=True)
-parser.add_argument('--sender', type=str, help='The sender emails address.', required=True)
-parser.add_argument('--recipient', type=str, help='The recipient emails address.', required=True)
-args = parser.parse_args()
-
-# Check that config file exsist and is a file.
-if os.path.isfile(args.config_file) != True:
-    logging.info("config file do not exist or is not a file.")
-    sys.exit(1)
-
-# Import config file.
-config = configparser.ConfigParser()
-conf_file = args.config_file
-config.read(conf_file)
-
-# Connect to db.
-Base = declarative_base()
-engine = db.create_engine('mysql://' + config["mariadb"]["user"] + ':' + config["mariadb"]["password"]  + '@' + config["mariadb"]["host"] + '/' + config["mariadb"]["db"])
-Session = db.orm.sessionmaker(bind=engine)
-session = Session()
+class Base(DeclarativeBase):
+    pass
 
 # DB modul for accounts.
 class Account(Base):
@@ -81,221 +60,284 @@ class Openpgp_public_key(Base):
     account = relationship("Account", back_populates="openpgp_public_keys")
     emails = relationship("Email", back_populates="openpgp_public_key")
 
-# Validate domain names. Only allow the following chars: a-z, 0-9 and .-
-def is_domain_allowed(domain):
-    if not len(domain) > 3:
-        return False
 
-    if domain.startswith('.') or domain.startswith('-'):
-        return False
-    if domain.endswith('.') or domain.endswith('-'):
-        return False
-    if '--' in domain:
-        return False
-    if '..' in domain:
-        return False
+class Ddmail_handler:
+    def __init__(self, logging, config, db_session):
+        self.logging = logging
+        self.config = config
+        self.db_session = db_session
 
-    if domain.find(".") == -1:
-        return False
+    async def handle_DATA(self, server, session, envelope):
+        # Get email data from stdin.
+        raw_email = envelope.content.decode('utf8', errors='replace')
 
-    pattern = re.compile(r"[a-z0-9.-]")
-    for char in domain:
-        if not re.match(pattern, char):
+        # Get the sender and recipient emails and make the strings lower chars.
+        #sender = envelope.mail_from
+        #recipient = envelope.rcpt_tos
+        print('Message from:', envelope.mail_from)
+        print('Message to:', envelope.rcpt_tos)
+        print('Message data:', envelope.content.decode('utf8', errors='replace'))
+
+        for recipient in envelope.rcpt_tos:
+            self.process_mail(envelope.mail_from, recipient, raw_email)
+
+        return '250 Message accepted for delivery'
+
+    def process_mail(self, sender, recipient, raw_email):
+        # Validate recipient email address.
+        if self.is_email_allowed(recipient) != True:
+            self.logging.error("validation failed for recipient email address: " + recipient)
+            self.send_email(sender, recipient, raw_email)
+                
+            return
+
+        # Validate from email address.
+        if self.is_email_allowed(sender) != True:
+            self.logging.error("validation failed for sender email address: " + sender)
+            self.send_email(sender, recipient, raw_email)
+            
+            return
+
+        # Log recipient email and sender email address.
+        self.logging.info("parsing email recipient: " + recipient + " sender: " + sender)
+
+        # Check if email should be encrypted. If the email should be encrypted we will encrypt it and return the encrypted email.
+        if self.shall_email_be_encrypted(sender, recipient, raw_email) == True:
+            self.logging.info("email skould be encrypted")
+            raw_email = self.encrypt_email(raw_email, recipient, config["DEFAULT"]["gnupg_home"])
+        else:
+            self.logging.info("email should not be encrypted")
+
+        # Send email back to postfix.
+        self.send_email(sender, recipient, raw_email)
+
+    # Validate domain names. Only allow the following chars: a-z, 0-9 and .-
+    def is_domain_allowed(self, domain):
+        if not len(domain) > 3:
             return False
 
-    return True
-
-# Validate email address. Only allow the following chars: a-z, 0-9 and @.-
-def is_email_allowed(email):
-    if not len(email) > 6:
-        return False
-
-    if email.count('@') != 1:
-        return False
-    if email.startswith('.') or email.startswith('@') or email.startswith('-'):
-        return False
-    if email.endswith('.') or email.endswith('@') or email.endswith('-'):
-        return False
-
-    # Validate email part of email.
-    splitted_email = email.split('@')
-    if splitted_email[0].startswith('.') or splitted_email[0].startswith('-'):
-        return False
-    if splitted_email[0].endswith('.') or splitted_email[0].endswith('-'):
-        return False
-    if '--' in splitted_email[0]:
-        return False
-    if '..' in splitted_email[0]:
-        return False
-
-    # Validate Domain part of email.
-    if is_domain_allowed(splitted_email[1]) != True:
-        return False
-
-    pattern = re.compile(r"[a-z0-9@.-]")
-    for char in email:
-        if not re.match(pattern, char):
+        if domain.startswith('.') or domain.startswith('-'):
+            return False
+        if domain.endswith('.') or domain.endswith('-'):
+            return False
+        if '--' in domain:
+            return False
+        if '..' in domain:
             return False
 
-    return True
-
-# Validate account string. Only allow the following chars: A-Z and 0-9
-def is_account_allowed(account):
-    pattern = re.compile(r"[A-Z0-9]")
-
-    for char in account:
-        if not re.match(pattern, char):
+        if domain.find(".") == -1:
             return False
 
-    return True
+        pattern = re.compile(r"[a-z0-9.-]")
+        for char in domain:
+            if not re.match(pattern, char):
+                return False
 
-# Validate openpgp public key fingerprint string. Only allow the following chars: A-Z, 0-9
-def is_fingerprint_allowed(fingerprint):
-    if fingerprint == None:
-        return False
-
-    # Fingerprint string should be 40 char.
-    allowed_len = 40
-    if len(fingerprint) != allowed_len:
-        return False
-
-    # Only allow A-Z, 0-9
-    pattern = re.compile(r"[A-Z0-9]")
-    for char in fingerprint:
-        if not re.match(pattern, char):
-            return False
-
-    return True
-
-# Send email to SMTP server 127.0.0.1 port 10028
-def send_email(sender ,recipient, msg):
-    s = smtplib.SMTP(host = "127.0.0.1", port = 10028)
-    s.sendmail(sender, recipient, msg.encode("utf8"))
-    s.quit()
-
-# Check if a email is encrypted ot not.
-def is_email_encrypted(raw_email):
-    parsed_email = email.message_from_string(raw_email)
-    look_for = ["Content-Type: multipart/encrypted","Content-Type: application/pgp-encrypted"]
-
-    for string in look_for:
-        if string in raw_email:
-            return True
-
-    return False
-
-# Check if email should be encrypted ot not.
-def shall_email_be_encrypted(sender, recipient, raw_email):
-    r = session.query(Email).filter(Email.email == recipient).first()
-    
-    # Check if email recipient exist in ddmail db. If email recipient do not exist in ddmail db it should not be encrypted beacuse ddmail is not the final destination.
-    if r == None:
-        return False
-    # If settings in ddmail db is not set to activate openpgp encryption for the email address then email should not be encrypted.
-    elif r.openpgp_public_key_id == None:
-        return False
-    # If email already is encrypted do not encrypt it again.
-    elif is_email_encrypted(raw_email) == True:
-        return False
-    # Email should be encrypted.
-    else:
         return True
 
-# Encrypt email body with OpenPGP.
-def encrypt_email(raw_email, recipient, gnupg_home):
-    # Log function arguments.
-    logging.info("encrypt_email() recipient: " + recipient + " gnupg_home: " + gnupg_home)
+    # Validate email address. Only allow the following chars: a-z, 0-9 and @.-
+    def is_email_allowed(self, email):
+        if not len(email) > 6:
+            return False
 
-    # Get openpgp public key fingerprint and keyring name, the keyring name is the ddmail account that ownes the current email.
-    r = session.query(Email).filter(Email.email == recipient).first()
+        if email.count('@') != 1:
+            return False
+        if email.startswith('.') or email.startswith('@') or email.startswith('-'):
+            return False
+        if email.endswith('.') or email.endswith('@') or email.endswith('-'):
+            return False
 
-    # Validate account string used as keyring filename.
-    if is_account_allowed(r.account.account) != True:
-        logging.error("encrypt_email() account_keyring: " + r.account.account + " failed validation")
-        return raw_email
+        # Validate email part of email.
+        splitted_email = email.split('@')
+        if splitted_email[0].startswith('.') or splitted_email[0].startswith('-'):
+            return False
+        if splitted_email[0].endswith('.') or splitted_email[0].endswith('-'):
+            return False
+        if '--' in splitted_email[0]:
+            return False
+        if '..' in splitted_email[0]:
+            return False
 
-    # Full path to keyring file.
-    account_keyring = gnupg_home + "/" + r.account.account
-    logging.info("encrypt_email() account_keyring: " + account_keyring)
+        # Validate Domain part of email.
+        if self.is_domain_allowed(splitted_email[1]) != True:
+            return False
 
-    # Check that account_keyring is a file.
-    if os.path.isfile(account_keyring) != True:
-        logging.error("encrypt_email() account_keyring: " + account_keyring + " is not a file")
-        return raw_email
+        pattern = re.compile(r"[a-z0-9@.-]")
+        for char in email:
+            if not re.match(pattern, char):
+                return False
+
+        return True
+
+    # Validate account string. Only allow the following chars: A-Z and 0-9
+    def is_account_allowed(self, account):
+        pattern = re.compile(r"[A-Z0-9]")
+
+        for char in account:
+            if not re.match(pattern, char):
+                return False
+
+        return True
+
+    # Validate openpgp public key fingerprint string. Only allow the following chars: A-Z, 0-9
+    def is_fingerprint_allowed(self, fingerprint):
+        if fingerprint == None:
+            return False
+
+        # Fingerprint string should be 40 char.
+        allowed_len = 40
+        if len(fingerprint) != allowed_len:
+            return False
+
+        # Only allow A-Z, 0-9
+        pattern = re.compile(r"[A-Z0-9]")
+        for char in fingerprint:
+            if not re.match(pattern, char):
+                return False
+
+        return True
+
+    # Send email to SMTP server 127.0.0.1 port 10028
+    def send_email(self, sender ,recipient, msg):
+        s = smtplib.SMTP(host = "127.0.0.1", port = 10028)
+        s.sendmail(sender, recipient, msg.encode("utf8"))
+        s.quit()
+
+    # Check if a email is encrypted ot not.
+    def is_email_encrypted(self, raw_email):
+        parsed_email = email.message_from_string(raw_email)
+        look_for = ["Content-Type: multipart/encrypted","Content-Type: application/pgp-encrypted"]
+
+        for string in look_for:
+            if string in raw_email:
+                return True
+
+        return False
+
+    # Check if email should be encrypted ot not.
+    def shall_email_be_encrypted(self, sender, recipient, raw_email):
+        r = self.db_session.query(Email).filter(Email.email == recipient).first()
     
-    # Check that we can read account_keyring file.
-    if os.access(account_keyring, os.R_OK) != True:
-        logging.error("encrypt_email() account_keyring: " + account_keyring + " can not be read")
-        return raw_email
+        # Check if email recipient exist in ddmail db. If email recipient do not exist in ddmail db it should not be encrypted beacuse ddmail is not the final destination.
+        if r == None:
+            return False
+        # If settings in ddmail db is not set to activate openpgp encryption for the email address then email should not be encrypted.
+        elif r.openpgp_public_key_id == None:
+            return False
+        # If email already is encrypted do not encrypt it again.
+        elif is_email_encrypted(raw_email) == True:
+            return False
+        # Email should be encrypted.
+        else:
+            return True
 
-    # Fingerprint of OpenPGP public key to use for encryption.
-    fingerprint = r.openpgp_public_key.fingerprint
-    logging.info("encrypt_email() fingerprint: " + fingerprint)
+    # Encrypt email body with OpenPGP.
+    def encrypt_email(self, raw_email, recipient, gnupg_home):
+        # Log function arguments.
+        self.logging.info("encrypt_email() recipient: " + recipient + " gnupg_home: " + gnupg_home)
 
-    # Validate fingerprint from db.
-    if is_fingerprint_allowed(fingerprint) != True:
-        logging.error("encrypt_email() fingerprint: " + fingerprint + " failed validation")
-        return raw_email
+        # Get openpgp public key fingerprint and keyring name, the keyring name is the ddmail account that ownes the current email.
+        r = self.db_session.query(Email).filter(Email.email == recipient).first()
+
+        # Validate account string used as keyring filename.
+        if is_account_allowed(r.account.account) != True:
+            self.logging.error("encrypt_email() account_keyring: " + r.account.account + " failed validation")
+            return raw_email
+
+        # Full path to keyring file.
+        account_keyring = gnupg_home + "/" + r.account.account
+        self.logging.info("encrypt_email() account_keyring: " + account_keyring)
+
+        # Check that account_keyring is a file.
+        if os.path.isfile(account_keyring) != True:
+            self.logging.error("encrypt_email() account_keyring: " + account_keyring + " is not a file")
+            return raw_email
     
-    parsed_email = email.message_from_string(raw_email)
+        # Check that we can read account_keyring file.
+        if os.access(account_keyring, os.R_OK) != True:
+            self.logging.error("encrypt_email() account_keyring: " + account_keyring + " can not be read")
+            return raw_email
 
-    # Import public keys from account keyring.
-    gpg = gnupg.GPG(keyring = account_keyring)
+        # Fingerprint of OpenPGP public key to use for encryption.
+        fingerprint = r.openpgp_public_key.fingerprint
+        self.logging.info("encrypt_email() fingerprint: " + fingerprint)
 
-    # Encrypt the email.
-    encrypted_email = gpg.encrypt(raw_email, fingerprint, always_trust = True)
+        # Validate fingerprint from db.
+        if is_fingerprint_allowed(fingerprint) != True:
+            self.logging.error("encrypt_email() fingerprint: " + fingerprint + " failed validation")
+            return raw_email
+    
+        parsed_email = email.message_from_string(raw_email)
 
-    # Check if email encryption was succesfull otherwise return the unancrypted email and log the error.
-    if encrypted_email.ok == False:
-        logging.error("Failed to encrypt email to " + recipient + " with error message " + encrypted_email.status)
-        return raw_email
+        # Import public keys from account keyring.
+        gpg = gnupg.GPG(keyring = account_keyring)
 
-    # Build the mime part needed for the new encrypted email.
-    encrypted_email_mime = email.mime.application.MIMEApplication(_data=str(encrypted_email).encode(),_subtype='octet-stream',_encoder=email.encoders.encode_7or8bit)
-    metadata_mime = email.mime.application.MIMEApplication(_data=b'Version: 1\n',_subtype='pgp-encrypted; name="encrypted.asc"',_encoder=email.encoders.encode_7or8bit)
-    metadata_mime['Content-Disposition'] = 'inline; filename="encrypted.asc"'
+        # Encrypt the email.
+        encrypted_email = gpg.encrypt(raw_email, fingerprint, always_trust = True)
 
-    # Put the mime parts together to a new email.
-    email_out = email.mime.multipart.MIMEMultipart('encrypted',protocol='application/pgp-encrypted')
-    email_out.attach(metadata_mime)
-    email_out.attach(encrypted_email_mime)
+        # Check if email encryption was succesfull otherwise return the unancrypted email and log the error.
+        if encrypted_email.ok == False:
+            self.logging.error("Failed to encrypt email to " + recipient + " with error message " + encrypted_email.status)
+            return raw_email
 
-    # Copy headers from the incoming email to the new email.
-    for key, value in parsed_email.items():
-        if key.lower() in ["return-path","delivered-to","received","authentication-results","from","to","subject","bcc","x-mx","x-spamd-bar","x-spam-status"]:
-            email_out[key] = value
+        # Build the mime part needed for the new encrypted email.
+        encrypted_email_mime = email.mime.application.MIMEApplication(_data=str(encrypted_email).encode(),_subtype='octet-stream',_encoder=email.encoders.encode_7or8bit)
+        metadata_mime = email.mime.application.MIMEApplication(_data=b'Version: 1\n',_subtype='pgp-encrypted; name="encrypted.asc"',_encoder=email.encoders.encode_7or8bit)
+        metadata_mime['Content-Disposition'] = 'inline; filename="encrypted.asc"'
 
-    return email_out.as_string()
+        # Put the mime parts together to a new email.
+        email_out = email.mime.multipart.MIMEMultipart('encrypted',protocol='application/pgp-encrypted')
+        email_out.attach(metadata_mime)
+        email_out.attach(encrypted_email_mime)
+
+        # Copy headers from the incoming email to the new email.
+        for key, value in parsed_email.items():
+            if key.lower() in ["return-path","delivered-to","received","authentication-results","from","to","subject","bcc","x-mx","x-spamd-bar","x-spam-status"]:
+                email_out[key] = value
+
+        return email_out.as_string()
 
 if __name__ == "__main__":
-    # Get email data from stdin.
-    raw_email = sys.stdin.read()
+    # Configure logging.
+    logging.basicConfig(filename="/var/log/ddmail_openpgp_encryptor.log", format='%(asctime)s: %(levelname)s: %(message)s', level=logging.INFO)
+    logging.info("openpgp_encryptor starting")
+    logging.error("openpgp_encryptor starting")
+    
+    # Get arguments from args.
+    parser = argparse.ArgumentParser(description="Encrypt email with OpenPGP for ddmail service.")
+    parser.add_argument('--config-file', type=str, help='Full path to config file.', required=True)
+    #parser.add_argument('--sender', type=str, help='The sender emails address.', required=True)
+    #parser.add_argument('--recipient', type=str, help='The recipient emails address.', required=True)
+    args = parser.parse_args()
 
-    # Get the sender and recipient emails and make the strings lower chars.
-    sender = args.sender.lower()
-    recipient = args.recipient.lower()
+    # Check that config file exsist and is a file.
+    if os.path.isfile(args.config_file) != True:
+        logging.info("config file do not exist or is not a file.")
+        sys.exit(1)
 
-    # Validate recipient email address.
-    if is_email_allowed(recipient) != True:
-        logging.error("validation failed for args.email_to: " + recipient)
-        send_email(sender, recipient, raw_email)
-        sys.exit(0)
+    # Import config file.
+    config = configparser.ConfigParser()
+    conf_file = args.config_file
+    config.read(conf_file)
 
-    # Validate from email address.
-    if is_email_allowed(sender) != True:
-        logging.error("validation failed for args.email_from: " + sender)
-        send_email(sender, recipient, raw_email)
-        sys.exit(0)
+    # Connect to db.
+    Base = declarative_base()
+    engine = db.create_engine('mysql://' + config["mariadb"]["user"] + ':' + config["mariadb"]["password"]  + '@' + config["mariadb"]["host"] + '/' + config["mariadb"]["db"])
+    Session = db.orm.sessionmaker(bind=engine)
+    db_session = Session()
 
-    # Log recipient email and sender email address.
-    logging.info("parsing email recipient: " + recipient + " sender: " + sender)
+    handler = Ddmail_handler(logging=logging, config=config, db_session=db_session)
+    controller = Controller(handler, hostname='127.0.0.1', port=2525)
+    controller.start()
 
-    # Check if email should be encrypted. If the email should be encrypted we will encrypt it and return the encrypted email.
-    if shall_email_be_encrypted(sender, recipient, raw_email) == True:
-        logging.info("email skould be encrypted")
-        raw_email = encrypt_email(raw_email, recipient, config["DEFAULT"]["gnupg_home"])
-    else:
-        logging.info("email should not be encrypted")
-
-    # Send email back to postfix.
-    send_email(sender, recipient, raw_email)
+    print("openpgp_encryptor running on localhost:2525")
+    logging.info("openpgp_encryptor running on localhost:2525")
+    
+    try:
+        import time
+        while True:
+            time.sleep(3600)
+    except KeyboardInterrupt:
+        pass
+    finally:
+        controller.stop()
