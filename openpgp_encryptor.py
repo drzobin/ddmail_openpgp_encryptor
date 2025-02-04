@@ -68,16 +68,10 @@ class Ddmail_handler:
         self.db_session = db_session
 
     async def handle_DATA(self, server, session, envelope):
-        # Get email data from stdin.
+        # Get email data.
         raw_email = envelope.content.decode('utf8', errors='replace')
 
-        # Get the sender and recipient emails and make the strings lower chars.
-        #sender = envelope.mail_from
-        #recipient = envelope.rcpt_tos
-        print('Message from:', envelope.mail_from)
-        print('Message to:', envelope.rcpt_tos)
-        print('Message data:', envelope.content.decode('utf8', errors='replace'))
-
+        # Process the email one recipient per recipeint.
         for recipient in envelope.rcpt_tos:
             self.process_mail(envelope.mail_from, recipient, raw_email)
 
@@ -199,7 +193,7 @@ class Ddmail_handler:
 
     # Send email to SMTP server 127.0.0.1 port 10028
     def send_email(self, sender ,recipient, msg):
-        s = smtplib.SMTP(host = "127.0.0.1", port = 10028)
+        s = smtplib.SMTP(host = self.config["DEFAULT"]["send_to_ip"], port = self.config["DEFAULT"]["send_to_port"])
         s.sendmail(sender, recipient, msg.encode("utf8"))
         s.quit()
 
@@ -301,13 +295,10 @@ if __name__ == "__main__":
     # Configure logging.
     logging.basicConfig(filename="/var/log/ddmail_openpgp_encryptor.log", format='%(asctime)s: %(levelname)s: %(message)s', level=logging.INFO)
     logging.info("openpgp_encryptor starting")
-    logging.error("openpgp_encryptor starting")
     
     # Get arguments from args.
     parser = argparse.ArgumentParser(description="Encrypt email with OpenPGP for ddmail service.")
     parser.add_argument('--config-file', type=str, help='Full path to config file.', required=True)
-    #parser.add_argument('--sender', type=str, help='The sender emails address.', required=True)
-    #parser.add_argument('--recipient', type=str, help='The recipient emails address.', required=True)
     args = parser.parse_args()
 
     # Check that config file exsist and is a file.
@@ -327,11 +318,10 @@ if __name__ == "__main__":
     db_session = Session()
 
     handler = Ddmail_handler(logging=logging, config=config, db_session=db_session)
-    controller = Controller(handler, hostname='127.0.0.1', port=2525)
+    controller = Controller(handler, hostname=config["DEFAULT"]["listen_on_ip"], port=config["DEFAULT"]["listen_on_port"])
     controller.start()
 
-    print("openpgp_encryptor running on localhost:2525")
-    logging.info("openpgp_encryptor running on localhost:2525")
+    logging.info("openpgp_encryptor running on: " + config["DEFAULT"]["listen_on_ip"] + ":" + config["DEFAULT"]["listen_on_port"])
     
     try:
         import time
