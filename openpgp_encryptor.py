@@ -13,8 +13,12 @@ import gnupg
 import sqlalchemy as db
 from sqlalchemy import ForeignKey
 from sqlalchemy.orm import relationship, mapped_column, declarative_base, DeclarativeBase
+#from aiosmtpd.controller import Controller
+#from aiosmtpd.handlers import Debugging
+import asyncio
 from aiosmtpd.controller import Controller
-from aiosmtpd.handlers import Debugging
+from aiosmtpd.handlers import Message
+
 
 class Base(DeclarativeBase):
     pass
@@ -61,7 +65,7 @@ class Openpgp_public_key(Base):
     emails = relationship("Email", back_populates="openpgp_public_key")
 
 
-class Ddmail_handler:
+class Ddmail_handler():
     def __init__(self, logging, config, db_session):
         self.logging = logging
         self.config = config
@@ -291,6 +295,17 @@ class Ddmail_handler:
 
         return email_out.as_string()
 
+async def main(loop, logging, config, db_session):
+    handler = Ddmail_handler(logging, config, db_session)
+    controller = Controller(handler, hostname=config["DEFAULT"]["listen_on_ip"], port=int(config["DEFAULT"]["listen_on_port"]))
+    controller.start()
+
+    # Run forever.
+    try:
+        await asyncio.Event().wait()
+    finally:
+        controller.stop()
+
 if __name__ == "__main__":
     # Configure logging.
     logging.basicConfig(filename="/var/log/ddmail_openpgp_encryptor.log", format='%(asctime)s: %(levelname)s: %(message)s', level=logging.INFO)
@@ -301,9 +316,9 @@ if __name__ == "__main__":
     parser.add_argument('--config-file', type=str, help='Full path to config file.', required=True)
     args = parser.parse_args()
 
-    # Check that config file exsist and is a file.
-    if os.path.isfile(args.config_file) != True:
-        logging.info("config file do not exist or is not a file.")
+    # Check that config file exists and is a file.
+    if not os.path.isfile(args.config_file):
+        logging.info("Config file does not exist or is not a file.")
         sys.exit(1)
 
     # Import config file.
@@ -317,17 +332,5 @@ if __name__ == "__main__":
     Session = db.orm.sessionmaker(bind=engine)
     db_session = Session()
 
-    handler = Ddmail_handler(logging=logging, config=config, db_session=db_session)
-    controller = Controller(handler, hostname=config["DEFAULT"]["listen_on_ip"], port=config["DEFAULT"]["listen_on_port"])
-    controller.start()
-
-    logging.info("openpgp_encryptor running on: " + config["DEFAULT"]["listen_on_ip"] + ":" + config["DEFAULT"]["listen_on_port"])
-    
-    try:
-        import time
-        while True:
-            time.sleep(3600)
-    except KeyboardInterrupt:
-        pass
-    finally:
-        controller.stop()
+    loop = asyncio.get_event_loop()
+    loop.run_until_complete(main(loop, logging, config, db_session))
