@@ -75,7 +75,7 @@ class Ddmail_handler():
         # Get email data.
         raw_email = envelope.content.decode('utf8', errors='replace')
 
-        # Process the email one recipient per recipeint.
+        # Process the email one recipient at a time.
         for recipient in envelope.rcpt_tos:
             self.process_mail(envelope.mail_from, recipient, raw_email)
 
