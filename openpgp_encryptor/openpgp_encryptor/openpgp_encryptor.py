@@ -29,10 +29,10 @@ class Account(Base):
     id = db.Column(db.Integer, primary_key=True)
     account = db.Column(db.String(100), unique=True, nullable=False)
     payment_token = db.Column(db.String(12), unique=True, nullable=False)
-    assets_in_sek = db.Column(db.Integer, nullable=False)
+    funds_in_sek = db.Column(db.Integer, nullable=False)
     is_enabled = db.Column(db.Boolean, unique=False, nullable=False)
     is_gratis = db.Column(db.Boolean, unique=False, nullable=False)
-    total_storage_space_mb = db.Column(db.Integer, nullable=False)
+    total_storage_space_g = db.Column(db.Integer, nullable=False)
     created = db.Column(db.DateTime, nullable=False)
     last_time_disabled = db.Column(db.DateTime, nullable=True)
 
@@ -64,7 +64,6 @@ class Openpgp_public_key(Base):
     account = relationship("Account", back_populates="openpgp_public_keys")
     emails = relationship("Email", back_populates="openpgp_public_key")
 
-
 class Ddmail_handler():
     def __init__(self, logging, config, db_session):
         self.logging = logging
@@ -77,7 +76,9 @@ class Ddmail_handler():
 
         # Process the email one recipient at a time.
         for recipient in envelope.rcpt_tos:
-            self.process_mail(envelope.mail_from, recipient, raw_email)
+            r = self.process_mail(envelope.mail_from, recipient, raw_email)
+            if r == False:
+                return '500 Message receipient or sender email address validation failed'
 
         return '250 Message accepted for delivery'
 
@@ -85,16 +86,14 @@ class Ddmail_handler():
         # Validate recipient email address.
         if self.is_email_allowed(recipient) != True:
             self.logging.error("validation failed for recipient email address: " + recipient)
-            self.send_email(sender, recipient, raw_email)
                 
-            return
+            return False
 
         # Validate from email address.
         if self.is_email_allowed(sender) != True:
             self.logging.error("validation failed for sender email address: " + sender)
-            self.send_email(sender, recipient, raw_email)
             
-            return
+            return False
 
         # Log recipient email and sender email address.
         self.logging.info("parsing email recipient: " + recipient + " sender: " + sender)
@@ -108,6 +107,8 @@ class Ddmail_handler():
 
         # Send email back to postfix.
         self.send_email(sender, recipient, raw_email)
+
+        return True
 
     # Validate domain names. Only allow the following chars: a-z, 0-9 and .-
     def is_domain_allowed(self, domain):
@@ -218,12 +219,15 @@ class Ddmail_handler():
     
         # Check if email recipient exist in ddmail db. If email recipient do not exist in ddmail db it should not be encrypted beacuse ddmail is not the final destination.
         if r == None:
+            print("r == None")
             return False
         # If settings in ddmail db is not set to activate openpgp encryption for the email address then email should not be encrypted.
         elif r.openpgp_public_key_id == None:
+            print("r.openpgp_public_key_id == None")
             return False
         # If email already is encrypted do not encrypt it again.
-        elif is_email_encrypted(raw_email) == True:
+        elif self.is_email_encrypted(raw_email) == True:
+            print("is_email_encrypted(raw_email) == True")
             return False
         # Email should be encrypted.
         else:
@@ -238,7 +242,7 @@ class Ddmail_handler():
         r = self.db_session.query(Email).filter(Email.email == recipient).first()
 
         # Validate account string used as keyring filename.
-        if is_account_allowed(r.account.account) != True:
+        if self.is_account_allowed(r.account.account) != True:
             self.logging.error("encrypt_email() account_keyring: " + r.account.account + " failed validation")
             return raw_email
 
@@ -261,7 +265,7 @@ class Ddmail_handler():
         self.logging.info("encrypt_email() fingerprint: " + fingerprint)
 
         # Validate fingerprint from db.
-        if is_fingerprint_allowed(fingerprint) != True:
+        if self.is_fingerprint_allowed(fingerprint) != True:
             self.logging.error("encrypt_email() fingerprint: " + fingerprint + " failed validation")
             return raw_email
     
@@ -318,7 +322,7 @@ if __name__ == "__main__":
 
     # Check that config file exists and is a file.
     if not os.path.isfile(args.config_file):
-        logging.info("Config file does not exist or is not a file.")
+        logging.error("config file does not exist or is not a file.")
         sys.exit(1)
 
     # Import config file.
