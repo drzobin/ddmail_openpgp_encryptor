@@ -219,15 +219,12 @@ class Ddmail_handler():
     
         # Check if email recipient exist in ddmail db. If email recipient do not exist in ddmail db it should not be encrypted beacuse ddmail is not the final destination.
         if r == None:
-            print("r == None")
             return False
         # If settings in ddmail db is not set to activate openpgp encryption for the email address then email should not be encrypted.
         elif r.openpgp_public_key_id == None:
-            print("r.openpgp_public_key_id == None")
             return False
         # If email already is encrypted do not encrypt it again.
         elif self.is_email_encrypted(raw_email) == True:
-            print("is_email_encrypted(raw_email) == True")
             return False
         # Email should be encrypted.
         else:
