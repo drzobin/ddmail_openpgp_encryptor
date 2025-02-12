@@ -235,6 +235,9 @@ class Ddmail_handler():
 
     # Encrypt email body with OpenPGP.
     def encrypt_email(self, raw_email, recipient, gnupg_home):
+        # Location of gpg binary.
+        gpg_binary_location = self.config["DEFAULT"]["gpg_binary_location"]
+
         # Log function arguments.
         self.logging.info("encrypt_email() recipient: " + recipient + " gnupg_home: " + gnupg_home)
 
@@ -272,7 +275,7 @@ class Ddmail_handler():
         parsed_email = email.message_from_string(raw_email)
 
         # Import public keys from account keyring.
-        gpg = gnupg.GPG(keyring = account_keyring)
+        gpg = gnupg.GPG(gpgbinary = gpg_binary_location, keyring = account_keyring)
 
         # Encrypt the email.
         encrypted_email = gpg.encrypt(raw_email, fingerprint, always_trust = True)
