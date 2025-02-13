@@ -10,18 +10,17 @@ import email.mime
 import email.mime.application
 import email.mime.multipart
 import gnupg
+import asyncio
 import sqlalchemy as db
 from sqlalchemy import ForeignKey
 from sqlalchemy.orm import relationship, mapped_column, declarative_base, DeclarativeBase
-#from aiosmtpd.controller import Controller
-#from aiosmtpd.handlers import Debugging
-import asyncio
 from aiosmtpd.controller import Controller
 from aiosmtpd.handlers import Message
 
 
-class Base(DeclarativeBase):
-    pass
+#class Base(DeclarativeBase):
+#    pass
+Base = declarative_base()
 
 # DB modul for accounts.
 class Account(Base):
@@ -65,10 +64,9 @@ class Openpgp_public_key(Base):
     emails = relationship("Email", back_populates="openpgp_public_key")
 
 class Ddmail_handler():
-    def __init__(self, logging, config, db_session):
+    def __init__(self, logging, config):
         self.logging = logging
         self.config = config
-        self.db_session = db_session
 
     async def handle_DATA(self, server, session, envelope):
         # Get email data.
@@ -78,7 +76,7 @@ class Ddmail_handler():
         for recipient in envelope.rcpt_tos:
             r = self.process_mail(envelope.mail_from, recipient, raw_email)
             if r == False:
-                return '500 Message receipient or sender email address validation failed'
+                return '501 Message receipient or sender email address validation failed'
 
         return '250 Message accepted for delivery'
 
@@ -100,7 +98,7 @@ class Ddmail_handler():
 
         # Check if email should be encrypted. If the email should be encrypted we will encrypt it and return the encrypted email.
         if self.shall_email_be_encrypted(sender, recipient, raw_email) == True:
-            self.logging.info("email skould be encrypted")
+            self.logging.info("email should be encrypted")
             raw_email = self.encrypt_email(raw_email, recipient, config["DEFAULT"]["gnupg_home"])
         else:
             self.logging.info("email should not be encrypted")
@@ -215,19 +213,31 @@ class Ddmail_handler():
 
     # Check if email should be encrypted ot not.
     def shall_email_be_encrypted(self, sender, recipient, raw_email):
-        r = self.db_session.query(Email).filter(Email.email == recipient).first()
-    
+        # Connect to db.
+        engine = db.create_engine('mysql://' + self.config["mariadb"]["user"] + ':' + self.config["mariadb"]["password"]  + '@' + self.config["mariadb"]["host"] + '/' + self.config["mariadb"]["db"])
+        Session = db.orm.sessionmaker(bind=engine)
+        my_session = Session()
+        r = my_session.query(Email).filter(Email.email == recipient).first()
+
         # Check if email recipient exist in ddmail db. If email recipient do not exist in ddmail db it should not be encrypted beacuse ddmail is not the final destination.
         if r == None:
+            my_session.close()
+
             return False
         # If settings in ddmail db is not set to activate openpgp encryption for the email address then email should not be encrypted.
         elif r.openpgp_public_key_id == None:
+            my_session.close()
+
             return False
         # If email already is encrypted do not encrypt it again.
         elif self.is_email_encrypted(raw_email) == True:
+            my_session.close()
+
             return False
         # Email should be encrypted.
         else:
+            my_session.close()
+
             return True
 
     # Encrypt email body with OpenPGP.
@@ -238,12 +248,17 @@ class Ddmail_handler():
         # Log function arguments.
         self.logging.info("encrypt_email() recipient: " + recipient + " gnupg_home: " + gnupg_home)
 
-        # Get openpgp public key fingerprint and keyring name, the keyring name is the ddmail account that ownes the current email.
-        r = self.db_session.query(Email).filter(Email.email == recipient).first()
+        # Get openpgp public key fingerprint and keyring name from db, the keyring name is the ddmail account that ownes the current email.
+        engine = db.create_engine('mysql://' + self.config["mariadb"]["user"] + ':' + self.config["mariadb"]["password"]  + '@' + self.config["mariadb"]["host"] + '/' + self.config["mariadb"]["db"])
+        Session = db.orm.sessionmaker(bind=engine)
+        my_session = Session()
+        r = my_session.query(Email).filter(Email.email == recipient).first()
 
         # Validate account string used as keyring filename.
         if self.is_account_allowed(r.account.account) != True:
             self.logging.error("encrypt_email() account_keyring: " + r.account.account + " failed validation")
+            my_session.close()
+
             return raw_email
 
         # Full path to keyring file.
@@ -253,11 +268,15 @@ class Ddmail_handler():
         # Check that account_keyring is a file.
         if os.path.isfile(account_keyring) != True:
             self.logging.error("encrypt_email() account_keyring: " + account_keyring + " is not a file")
+            my_session.close()
+
             return raw_email
     
         # Check that we can read account_keyring file.
         if os.access(account_keyring, os.R_OK) != True:
             self.logging.error("encrypt_email() account_keyring: " + account_keyring + " can not be read")
+            my_session.close()
+
             return raw_email
 
         # Fingerprint of OpenPGP public key to use for encryption.
@@ -267,6 +286,8 @@ class Ddmail_handler():
         # Validate fingerprint from db.
         if self.is_fingerprint_allowed(fingerprint) != True:
             self.logging.error("encrypt_email() fingerprint: " + fingerprint + " failed validation")
+            my_session.close()
+
             return raw_email
     
         parsed_email = email.message_from_string(raw_email)
@@ -280,6 +301,8 @@ class Ddmail_handler():
         # Check if email encryption was succesfull otherwise return the unancrypted email and log the error.
         if encrypted_email.ok == False:
             self.logging.error("Failed to encrypt email to " + recipient + " with error message " + encrypted_email.status)
+            my_session.close()
+
             return raw_email
 
         # Build the mime part needed for the new encrypted email.
@@ -297,10 +320,11 @@ class Ddmail_handler():
             if key.lower() in ["return-path","delivered-to","received","authentication-results","from","to","subject","bcc","x-mx","x-spamd-bar","x-spam-status"]:
                 email_out[key] = value
 
+        my_session.close()
         return email_out.as_string()
 
-async def main(loop, logging, config, db_session):
-    handler = Ddmail_handler(logging, config, db_session)
+async def main(loop, logging, config):
+    handler = Ddmail_handler(logging, config)
     controller = Controller(handler, hostname=config["DEFAULT"]["listen_on_ip"], port=int(config["DEFAULT"]["listen_on_port"]))
     controller.start()
 
@@ -330,11 +354,5 @@ if __name__ == "__main__":
     conf_file = args.config_file
     config.read(conf_file)
 
-    # Connect to db.
-    Base = declarative_base()
-    engine = db.create_engine('mysql://' + config["mariadb"]["user"] + ':' + config["mariadb"]["password"]  + '@' + config["mariadb"]["host"] + '/' + config["mariadb"]["db"])
-    Session = db.orm.sessionmaker(bind=engine)
-    db_session = Session()
-
     loop = asyncio.get_event_loop()
-    loop.run_until_complete(main(loop, logging, config, db_session))
+    loop.run_until_complete(main(loop, logging, config))
