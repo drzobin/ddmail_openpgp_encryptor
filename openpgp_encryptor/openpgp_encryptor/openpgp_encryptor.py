@@ -162,7 +162,7 @@ class Ddmail_handler():
         if '..' in local_part:
             return False
 
-        pattern = re.compile(r"[a-zA-Z0-9.-+=_]")
+        pattern = re.compile(r"[a-zA-Z0-9.+=_-]")
         for char in local_part:
             if not re.match(pattern, char):
                 return False
