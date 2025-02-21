@@ -18,8 +18,6 @@ from aiosmtpd.controller import Controller
 from aiosmtpd.handlers import Message
 
 
-#class Base(DeclarativeBase):
-#    pass
 Base = declarative_base()
 
 # DB modul for accounts.
@@ -108,7 +106,7 @@ class Ddmail_handler():
 
         return True
 
-    # Validate domain names. Only allow the following chars: a-z, 0-9 and .-
+    # Validate domain names. Only allow the following chars: a-z, A-Z, 0-9 and .-
     def is_domain_allowed(self, domain):
         if not len(domain) > 3:
             return False
@@ -125,7 +123,7 @@ class Ddmail_handler():
         if domain.find(".") == -1:
             return False
 
-        pattern = re.compile(r"[a-z0-9.-]")
+        pattern = re.compile(r"[a-zA-Z0-9.-]")
         for char in domain:
             if not re.match(pattern, char):
                 return False
@@ -134,7 +132,10 @@ class Ddmail_handler():
 
     # Validate email address. Only allow the following chars: a-z, 0-9 and @.-
     def is_email_allowed(self, email):
+        # Check email length.
         if not len(email) > 6:
+            return False
+        if len(email) > 256:
             return False
 
         if email.count('@') != 1:
@@ -144,25 +145,31 @@ class Ddmail_handler():
         if email.endswith('.') or email.endswith('@') or email.endswith('-'):
             return False
 
-        # Validate email part of email.
+        # Split email in local part and domain part example [local part]@[domain part].
         splitted_email = email.split('@')
-        if splitted_email[0].startswith('.') or splitted_email[0].startswith('-'):
+        local_part = splitted_email[0]
+        domain_part = splitted_email[1]
+
+        # Validate local part of email.
+        if len(local_part) > 64:
             return False
-        if splitted_email[0].endswith('.') or splitted_email[0].endswith('-'):
+        if local_part.startswith('.') or local_part.startswith('-'):
             return False
-        if '--' in splitted_email[0]:
+        if local_part.endswith('.') or local_part.endswith('-'):
             return False
-        if '..' in splitted_email[0]:
+        if '--' in local_part:
+            return False
+        if '..' in local_part:
             return False
 
-        # Validate Domain part of email.
-        if self.is_domain_allowed(splitted_email[1]) != True:
-            return False
-
-        pattern = re.compile(r"[a-z0-9@.-]")
-        for char in email:
+        pattern = re.compile(r"[a-zA-Z0-9.-+=_]")
+        for char in local_part:
             if not re.match(pattern, char):
                 return False
+
+        # Validate domain part of email.
+        if self.is_domain_allowed(domain_part) != True:
+            return False
 
         return True
 
