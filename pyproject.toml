@@ -1,0 +1,32 @@
+[project]
+name = "ddmail_openpgp_encryptor"
+version = "0.0.1"
+authors = [
+  { name="Robin Larsson", email="me@drz.se" },
+]
+description = "Program to encrypt incoming emails with OpenPGP for the DDMail project."
+readme = "README.md"
+requires-python = ">=3.8"
+classifiers = [
+    "Programming Language :: Python :: 3",
+    "Operating System :: OS Independent",
+]
+dependencies = [
+  "mysqlclient",
+  "sqlalchemy",
+  "python-gnupg",
+  "aiosmtpd",
+]
+license = "AGPL-3.0"
+license-files = ["LICEN[CS]E*"]
+
+[project.scripts]
+ddmail_openpgp_encryptor = "ddmail_openpgp_encryptor.__main__:main"
+
+[project.urls]
+Homepage = "https://github.com/drzobin/ddmail_openpgp_encryptor"
+Issues = "https://github.com/drzobin/ddmail_openpgp_encryptor/issues"
+
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
