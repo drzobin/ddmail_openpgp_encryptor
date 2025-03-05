@@ -21,6 +21,7 @@ from aiosmtpd.handlers import Message
 
 Base = declarative_base()
 
+
 # DB modul for accounts.
 class Account(Base):
     __tablename__ = 'accounts'
@@ -98,7 +99,7 @@ class Ddmail_handler():
         # Check if email should be encrypted. If the email should be encrypted we will encrypt it and return the encrypted email.
         if self.shall_email_be_encrypted(sender, recipient, raw_email) == True:
             self.logging.info("email should be encrypted")
-            raw_email = self.encrypt_email(raw_email, recipient, config["DEFAULT"]["gnupg_home"])
+            raw_email = self.encrypt_email(raw_email, recipient, self.config["DEFAULT"]["gnupg_home"])
         else:
             self.logging.info("email should not be encrypted")
 
@@ -234,38 +235,5 @@ class Ddmail_handler():
                 email_out[key] = value
 
         my_session.close()
+
         return email_out.as_string()
-
-async def main(loop, logging, config):
-    handler = Ddmail_handler(logging, config)
-    controller = Controller(handler, hostname=config["DEFAULT"]["listen_on_ip"], port=int(config["DEFAULT"]["listen_on_port"]))
-    controller.start()
-
-    # Run forever.
-    try:
-        await asyncio.Event().wait()
-    finally:
-        controller.stop()
-
-if __name__ == "__main__":
-    # Configure logging.
-    logging.basicConfig(filename="/var/log/ddmail_openpgp_encryptor.log", format='%(asctime)s: %(levelname)s: %(message)s', level=logging.INFO)
-    logging.info("openpgp_encryptor starting")
-    
-    # Get arguments from args.
-    parser = argparse.ArgumentParser(description="Encrypt email with OpenPGP for ddmail service.")
-    parser.add_argument('--config-file', type=str, help='Full path to config file.', required=True)
-    args = parser.parse_args()
-
-    # Check that config file exists and is a file.
-    if not os.path.isfile(args.config_file):
-        logging.error("config file does not exist or is not a file.")
-        sys.exit(1)
-
-    # Import config file.
-    config = configparser.ConfigParser()
-    conf_file = args.config_file
-    config.read(conf_file)
-
-    loop = asyncio.get_event_loop()
-    loop.run_until_complete(main(loop, logging, config))
