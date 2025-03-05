@@ -28,5 +28,5 @@ Step 5: Install package<br>
 `pip install [code path]/dist/[package name].whl`
 
 ## Run
-source [venv path]/bin/activate
-ddmail_openpgp_encryptor --config-file [config file].ini
+`source [venv path]/bin/activate`<br>
+`ddmail_openpgp_encryptor --config-file [config file].ini`
