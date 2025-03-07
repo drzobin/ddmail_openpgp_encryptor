@@ -32,6 +32,7 @@ dev = [
   "pytest-cov",
   "flake8",
   "hatchling",
+  "twine",
 ]
 test = [
   "mysqlclient",
