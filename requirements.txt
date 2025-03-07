@@ -1,8 +1,0 @@
-mysqlclient
-sqlalchemy
-python-gnupg
-aiosmtpd
-pytest
-coverage
-flake8
-hatchling
