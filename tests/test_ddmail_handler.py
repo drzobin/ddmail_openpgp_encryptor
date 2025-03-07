@@ -1,0 +1,1 @@
+from ddmail_openpgp_encryptor.ddmail_handler import Ddmail_handler
