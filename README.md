@@ -30,3 +30,6 @@ Packages is now located under [code path]/dist folder<br>
 ## Run
 `source [venv path]/bin/activate`<br>
 `ddmail_openpgp_encryptor --config-file [config file].ini`
+
+## Coding
+Follow PEP8 and PEP257. Use Flake8 with flake8-docstrings for linting. Strive for 100% test coverage.
