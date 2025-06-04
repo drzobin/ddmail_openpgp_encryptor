@@ -5,6 +5,9 @@ import smtplib
 import re
 import configparser
 import os
+import string
+import secrets
+import shutil
 import email
 import email.mime
 import email.mime.application
@@ -59,13 +62,14 @@ class Openpgp_public_key(Base):
     id = db.Column(db.Integer, primary_key=True,nullable=False)
     account_id = db.Column(db.Integer, ForeignKey('accounts.id'),nullable=False)
     fingerprint = db.Column(db.String(200), unique=True, nullable=False)
+    public_key = db.Column(db.Text, nullable=False)
 
     account = relationship("Account", back_populates="openpgp_public_keys")
     emails = relationship("Email", back_populates="openpgp_public_key")
 
 class Ddmail_handler():
-    def __init__(self, logging, config):
-        self.logging = logging
+    def __init__(self, logger, config):
+        self.logger = logger
         self.config = config
 
     async def handle_DATA(self, server, session, envelope):
@@ -83,34 +87,35 @@ class Ddmail_handler():
     def process_mail(self, sender, recipient, raw_email):
         # Validate recipient email address.
         if validators.is_email_allowed(recipient) != True:
-            self.logging.error("validation failed for recipient email address: " + recipient)
-                
+            self.logger.error("validation failed for recipient email address: " + recipient)
+
             return False
 
         # Validate from email address.
         if validators.is_email_allowed(sender) != True:
-            self.logging.error("validation failed for sender email address: " + sender)
-            
+            self.logger.error("validation failed for sender email address: " + sender)
+
             return False
 
         # Log recipient email and sender email address.
-        self.logging.info("parsing email recipient: " + recipient + " sender: " + sender)
+        self.logger.info("parsing email recipient: " + recipient + " sender: " + sender)
 
         # Check if email should be encrypted. If the email should be encrypted we will encrypt it and return the encrypted email.
         if self.shall_email_be_encrypted(sender, recipient, raw_email) == True:
-            self.logging.info("email should be encrypted")
-            raw_email = self.encrypt_email(raw_email, recipient, self.config["DEFAULT"]["gnupg_home"])
+            self.logger.info("email should be encrypted")
+            raw_email = self.encrypt_email(raw_email, recipient)
         else:
-            self.logging.info("email should not be encrypted")
+            self.logger.info("email should not be encrypted")
 
         # Send email back to postfix.
+        self.logger.debug("sending email recipient: " + recipient + " sender: " + sender)
         self.send_email(sender, recipient, raw_email)
 
         return True
 
     # Send email to SMTP server 127.0.0.1 port 10028
     def send_email(self, sender ,recipient, msg):
-        s = smtplib.SMTP(host = self.config["DEFAULT"]["send_to_ip"], port = self.config["DEFAULT"]["send_to_port"])
+        s = smtplib.SMTP(host = self.config["SEND_TO_IP"], port = self.config["SEND_TO_PORT"])
         s.sendmail(sender, recipient, msg.encode("utf8"))
         s.quit()
 
@@ -128,7 +133,7 @@ class Ddmail_handler():
     # Check if email should be encrypted ot not.
     def shall_email_be_encrypted(self, sender, recipient, raw_email):
         # Connect to db.
-        engine = db.create_engine('mysql://' + self.config["mariadb"]["user"] + ':' + self.config["mariadb"]["password"]  + '@' + self.config["mariadb"]["host"] + '/' + self.config["mariadb"]["db"])
+        engine = db.create_engine('mysql://' + self.config["MARIADB"]["USER"] + ':' + self.config["MARIADB"]["PASSWORD"]  + '@' + self.config["MARIADB"]["HOST"] + '/' + self.config["MARIADB"]["DB"])
         Session = db.orm.sessionmaker(bind=engine)
         my_session = Session()
         r = my_session.query(Email).filter(Email.email == recipient).first()
@@ -155,66 +160,101 @@ class Ddmail_handler():
             return True
 
     # Encrypt email body with OpenPGP.
-    def encrypt_email(self, raw_email, recipient, gnupg_home):
-        # Location of gpg binary.
-        gpg_binary_location = self.config["DEFAULT"]["gpg_binary_location"]
-
+    def encrypt_email(self, raw_email, recipient):
         # Log function arguments.
-        self.logging.info("encrypt_email() recipient: " + recipient + " gnupg_home: " + gnupg_home)
+        self.logger.debug("recipient: " + recipient)
+
+        # Location of gpg binary.
+        gpg_binary_path = self.config["GPG_BINARY_PATH"]
+
+        # Folder to be used for temp storage of keyring etc files. Used by gpg during encryption.
+        tmp_folder = self.config["TMP_FOLDER"]
+
+        # Log vars value.
+        self.logger.debug("tmp_folder set to " + tmp_folder)
+        self.logger.debug("gpg_binary_path set to " + gpg_binary_path)
 
         # Get openpgp public key fingerprint and keyring name from db, the keyring name is the ddmail account that ownes the current email.
-        engine = db.create_engine('mysql://' + self.config["mariadb"]["user"] + ':' + self.config["mariadb"]["password"]  + '@' + self.config["mariadb"]["host"] + '/' + self.config["mariadb"]["db"])
+        engine = db.create_engine('mysql://' + self.config["MARIADB"]["USER"] + ':' + self.config["MARIADB"]["PASSWORD"]  + '@' + self.config["MARIADB"]["HOST"] + '/' + self.config["MARIADB"]["DB"])
         Session = db.orm.sessionmaker(bind=engine)
         my_session = Session()
+
         r = my_session.query(Email).filter(Email.email == recipient).first()
-
-        # Validate account string used as keyring filename.
-        if validators.is_account_allowed(r.account.account) != True:
-            self.logging.error("encrypt_email() account_keyring: " + r.account.account + " failed validation")
-            my_session.close()
-
-            return raw_email
-
-        # Full path to keyring file.
-        account_keyring = gnupg_home + "/" + r.account.account
-        self.logging.info("encrypt_email() account_keyring: " + account_keyring)
-
-        # Check that account_keyring is a file.
-        if os.path.isfile(account_keyring) != True:
-            self.logging.error("encrypt_email() account_keyring: " + account_keyring + " is not a file")
-            my_session.close()
-
-            return raw_email
-    
-        # Check that we can read account_keyring file.
-        if os.access(account_keyring, os.R_OK) != True:
-            self.logging.error("encrypt_email() account_keyring: " + account_keyring + " can not be read")
-            my_session.close()
-
-            return raw_email
 
         # Fingerprint of OpenPGP public key to use for encryption.
         fingerprint = r.openpgp_public_key.fingerprint
-        self.logging.info("encrypt_email() fingerprint: " + fingerprint)
+        self.logger.info("fingerprint: " + fingerprint)
 
         # Validate fingerprint from db.
         if validators.is_openpgp_key_fingerprint_allowed(fingerprint) != True:
-            self.logging.error("encrypt_email() fingerprint: " + fingerprint + " failed validation")
+            self.logger.error("fingerprint: " + fingerprint + " failed validation")
             my_session.close()
 
             return raw_email
-    
+
         parsed_email = email.message_from_string(raw_email)
 
-        # Import public keys from account keyring.
-        gpg = gnupg.GPG(gpgbinary = gpg_binary_location, keyring = account_keyring)
+        # Generate a random string.
+        alphabet = string.ascii_letters + string.digits
+        random = ''.join(secrets.choice(alphabet) for i in range(24))
+
+        # Location of tmp gnupghome folder and keyring file used by gpg
+        gnupghome_path = tmp_folder + "/" + random
+        keyring_path = gnupghome_path + "/" + random
+
+        self.logger.debug("gnupghome_path set to " + gnupghome_path)
+        self.logger.debug("keyring_path set to " + keyring_path)
+
+        # Check that tmp_folder exist.
+        if not os.path.isdir(tmp_folder) == True:
+            self.logger.error("tmp_folder do not exist")
+            my_session.close()
+
+            return raw_email
+
+        # Create gnupghome_path folder.
+        if not os.path.exists(gnupghome_path):
+            self.logger.debug("creating gnupghome_path " + gnupghome_path)
+            os.makedirs(gnupghome_path)
+
+        # Create gnupg gpg object.
+        gpg = gnupg.GPG(gnupghome=gnupghome_path, keyring=keyring_path, gpgbinary=gpg_binary_path)
+
+        # Import public key from db to gpg object.
+        key_data = r.openpgp_public_key.public_key
+        import_result = gpg.import_keys(key_data)
+
+        # Check if 1 key has been imported.
+        if import_result.count != 1:
+            self.logger.error("import_result.count is not 1")
+            shutil.rmtree(gnupghome_path)
+            my_session.close()
+
+            return raw_email
+
+        # Check that fingerprint from importe_result is not None.
+        if import_result.fingerprints[0] == None:
+            self.logger.error("import_result.fingerprints[0] is None")
+            shutil.rmtree(gnupghome_path)
+            my_session.close()
+
+            return raw_email
+
+        # Validate fingerprint from importe_result.
+        if validators.is_openpgp_key_fingerprint_allowed(import_result.fingerprints[0]) != True:
+            self.logger.error("import_result.fingerprints[0] validation failed")
+            shutil.rmtree(gnupghome_path)
+            my_session.close()
+
+            return raw_email
 
         # Encrypt the email.
         encrypted_email = gpg.encrypt(raw_email, fingerprint, always_trust = True)
 
         # Check if email encryption was succesfull otherwise return the unancrypted email and log the error.
         if encrypted_email.ok == False:
-            self.logging.error("Failed to encrypt email to " + recipient + " with error message " + encrypted_email.status)
+            self.logger.error("Failed to encrypt email to " + recipient + " with error message " + encrypted_email.status)
+            shutil.rmtree(gnupghome_path)
             my_session.close()
 
             return raw_email
@@ -235,5 +275,8 @@ class Ddmail_handler():
                 email_out[key] = value
 
         my_session.close()
+
+        # Remove tmp folder gnupghome_path.
+        shutil.rmtree(gnupghome_path)
 
         return email_out.as_string()
