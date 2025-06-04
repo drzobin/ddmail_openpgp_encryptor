@@ -1,0 +1,21 @@
+LISTEN_ON_IP = 127.0.0.1
+SEND_TO_IP = 127.0.0.1
+GPG_BINARY_PATH = '/usr/bin/gpg'
+TMP_FOLDER = '/opt/ddmail_openpgp_encryptor/tmp'
+LISTEN_ON_PORT = 8005
+SEND_TO_PORT = 10026
+
+[MARIADB]
+HOST = 127.0.0.1
+DB = mail_dev
+USER = mail_r
+PASSWORD = change_me
+PORT = 3306
+
+[LOGGING]
+LOGLEVEL = 'INFO'
+LOG_TO_CONSOLE = true
+LOG_TO_FILE = true
+LOGFILE = '/var/log/ddmail_openpgp_encryptor.log'
+LOG_TO_SYSLOG = true
+SYSLOG_SERVER = '/dev/log'
