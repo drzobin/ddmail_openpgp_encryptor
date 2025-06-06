@@ -1,9 +1,7 @@
 [project]
 name = "ddmail_openpgp_encryptor"
 version = "0.0.1"
-authors = [
-  { name="Robin Larsson", email="me@drz.se" },
-]
+authors = [{ name = "Robin Larsson", email = "me@drz.se" }]
 description = "Program to encrypt incoming emails with OpenPGP for the DDMail project."
 readme = "README.md"
 requires-python = ">=3.8"
@@ -12,37 +10,40 @@ classifiers = [
     "Operating System :: POSIX :: Linux",
 ]
 dependencies = [
-  "mysqlclient",
-  "sqlalchemy",
-  "python-gnupg",
-  "aiosmtpd",
-  "ddmail-validators",
+    "toml",
+    "mysqlclient",
+    "sqlalchemy",
+    "python-gnupg",
+    "aiosmtpd",
+    "ddmail-validators",
 ]
 license = "AGPL-3.0"
 license-files = ["LICEN[CS]E*"]
 
 [project.optional-dependencies]
 dev = [
-  "mysqlclient",
-  "sqlalchemy",
-  "python-gnupg",
-  "aiosmtpd",
-  "ddmail-validators",
-  "pytest",
-  "pytest-cov",
-  "flake8",
-  "hatchling",
-  "twine",
+    "toml",
+    "mysqlclient",
+    "sqlalchemy",
+    "python-gnupg",
+    "aiosmtpd",
+    "ddmail-validators",
+    "pytest",
+    "pytest-cov",
+    "flake8",
+    "hatchling",
+    "twine",
 ]
 test = [
-  "mysqlclient",
-  "sqlalchemy",
-  "python-gnupg",
-  "aiosmtpd",
-  "ddmail-validators",
-  "pytest",
-  "pytest-cov",
-  "flake8",
+    "toml",
+    "mysqlclient",
+    "sqlalchemy",
+    "python-gnupg",
+    "aiosmtpd",
+    "ddmail-validators",
+    "pytest",
+    "pytest-cov",
+    "flake8",
 ]
 
 [project.scripts]
